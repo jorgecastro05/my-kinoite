@@ -1,45 +1,75 @@
----
 # yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
-# image will be published to ghcr.io/<user>/<name>
-name: template
-# description will be included in the image's metadata
-description: This is my personal OS image.
+name: my-kinoite
+description: My personal Fedora Kinoite image, replacing restoration.sh
 
-# the base image to build on top of (FROM) and the version tag to use
-base-image: ghcr.io/ublue-os/silverblue-main
-image-version: latest # You can pin to a specific version of Fedora as well
+# Universal Blue already ships an NVIDIA variant with RPM Fusion, akmod-nvidia,
+# and CUDA pre-wired and pre-built (so you don't rebuild the kernel module
+# on every kernel update). Using it as the base replaces step 1 of the old
+# script entirely. If you're not on NVIDIA, switch this to
+# ghcr.io/ublue-os/kinoite-main and drop the akmods module below.
+base-image: ghcr.io/ublue-os/kinoite-nvidia-open
+image-version: latest
 
-# module configuration, executed in order
-# you can include multiple instances of the same module
 modules:
+
+  # --- Step 2: Flatpaks -----------------------------------------------
+  # Universal Blue images already have the Flathub *system* remote set up,
+  # so we only need to declare what to install. Single-user desktop -> user
+  # scope, so no sudo/polkit prompt is needed to manage them later.
+  - type: default-flatpaks
+    configurations:
+      - scope: user
+        repo:
+          title: Flathub (user)
+        install:
+          - com.github.tchx84.Flatseal
+          - com.logseq.Logseq
+          - com.obsproject.Studio
+          - com.obsproject.Studio.Plugin.PipeWireAudioCapture
+          - com.obsproject.Studio.Plugin.Shaderfilter
+          - com.obsproject.Studio.Plugin.SourceClone
+          - com.obsproject.Studio.Plugin.SourceRecord
+          - com.obsproject.Studio.Plugin.MultiRTMP
+          - com.vscodium.codium
+          - de.haeckerfelix.Shortwave
+          - dev.lizardbyte.app.Sunshine
+          - io.github.kolunmi.Bazaar
+          - org.chromium.Chromium
+          - org.darktable.Darktable
+          - org.deskflow.deskflow
+          - org.filezillaproject.Filezilla
+          - org.kde.haruna
+          - org.kde.kdenlive
+          - org.kde.ktorrent
+          - org.mozilla.firefox
+          - xyz.riothedev.emojify
+
+  # --- Step 3: OBS Studio NVIDIA & Wayland env overrides ----------------
+  # Flatpak overrides are just files under /etc/flatpak/overrides/<app-id>.
+  # Shipping the file here is equivalent to running `flatpak override`
+  # by hand, and it survives every image update automatically.
   - type: files
     files:
       - source: system
-        destination: / # copies files/system/* (* means everything inside it) into your image's root folder /
+        destination: /
 
-  - type: dnf
-    repos:
-      copr:
-        - atim/starship
-    install:
-      packages:
-        - micro
-        - starship
-    remove:
-      packages:
-        # example: removing firefox (in favor of the flatpak)
-        # "firefox" is the main package, "firefox-langpacks" is a dependency
-        - firefox
-        - firefox-langpacks # also remove firefox dependency (not required for all packages, this is a special case)
+  # --- Step 4: Homebrew --------------------------------------------------
+  # This installs the Homebrew *runtime* itself (build-time download,
+  # first-boot activation, auto-update timers). It does NOT install your
+  # formulae -- brew lives under /var/home, which isn't part of the image,
+  # so the formula list is installed once via the ujust recipe below
+  # instead (see files/justfiles/setup.just).
+  - type: brew
+    brew-analytics: false
 
-  - type: default-flatpaks
-    configurations:
-      - notify: true # Send notification after install/uninstall is finished (true/false)
-        scope: system
-        # If no repo information is specified, Flathub will be used by default
-        install: # system flatpaks we want all users to have and not remove
-          - org.mozilla.firefox
-          - org.gnome.Loupe
-      - scope: user # Also add Flathub user repo, but no user packages
+  # --- ujust recipes: one-time, post-first-boot setup ------------------
+  # usermod/groupadd can't run at build time (no real users exist yet),
+  # and `brew install <formula>` needs the live Homebrew runtime from the
+  # module above. Both are one-time actions -- the results (group
+  # membership in /etc/group, installed formulae in /var) persist across
+  # every future update on their own, so they don't need to re-run.
+  - type: justfiles
 
-  - type: signing # this sets up the proper policy & signing files for signed images to work fully
+# --- Step 5 (repos/keys needed by nothing else) -------------------------
+# Nothing further needed for RPM Fusion / NVIDIA: they're baked into the
+# kinoite-nvidia-open base image already.
